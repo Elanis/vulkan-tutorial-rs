@@ -1,25 +1,54 @@
 extern crate vulkano;
+extern crate vulkano_win;
 extern crate winit;
 
 use winit::{EventsLoop, WindowBuilder, dpi::LogicalSize, Event, WindowEvent, Window};
+
+use std::sync::Arc;
+use vulkano::instance::{
+    Instance,
+    InstanceExtensions,
+    ApplicationInfo,
+    Version,
+};
 
 const WIDTH: u32 = 800;
 const HEIGHT: u32 = 600;
 
 #[allow(unused)]
 struct HelloTriangleApplication {
+    instance: Arc<Instance>,
     events_loop: EventsLoop,
     window: Window,
 }
 
 impl HelloTriangleApplication {
     pub fn initialize() -> Self {
+        let instance = Self::create_instance();
         let (events_loop, window) = Self::init_window();
 
         Self {
+            instance,
             events_loop,
             window,
         }
+    }
+
+    fn create_instance() -> Arc<Instance> {
+        let supported_extensions = InstanceExtensions::supported_by_core()
+            .expect("failed to retrieve supported extensions");
+        println!("Supported extensions: {:?}", supported_extensions);
+
+        let app_info = ApplicationInfo {
+            application_name: Some("Hello Triangle".into()),
+            application_version: Some(Version { major: 1, minor: 0, patch: 0 }),
+            engine_name: Some("No Engine".into()),
+            engine_version: Some(Version { major: 1, minor: 0, patch: 0 }),
+        };
+
+        let required_extensions = vulkano_win::required_extensions();
+        Instance::new(Some(&app_info), &required_extensions, None)
+            .expect("failed to create Vulkan instance")
     }
 
     fn init_window() -> (EventsLoop, Window) {
