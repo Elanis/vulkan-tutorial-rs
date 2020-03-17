@@ -2,9 +2,12 @@ extern crate vulkano;
 extern crate vulkano_win;
 extern crate winit;
 
-use winit::{EventsLoop, WindowBuilder, dpi::LogicalSize, Event, WindowEvent, Window};
-
 use std::sync::Arc;
+use std::collections::HashSet;
+
+use winit::{EventsLoop, WindowBuilder, Window, dpi::LogicalSize, Event, WindowEvent};
+use vulkano_win::VkSurfaceBuild;
+
 use vulkano::instance::{
     Instance,
     InstanceExtensions,
@@ -15,6 +18,9 @@ use vulkano::instance::{
 };
 use vulkano::instance::debug::{DebugCallback, MessageTypes};
 use vulkano::device::{Device, DeviceExtensions, Queue, Features};
+use vulkano::swapchain::{
+    Surface,
+};
 
 const WIDTH: u32 = 800;
 const HEIGHT: u32 = 600;
@@ -31,17 +37,17 @@ const ENABLE_VALIDATION_LAYERS: bool = false;
 // QueueFamily
 struct QueueFamilyIndices {
     graphics_family: i32,
+    present_family: i32,
 }
 impl QueueFamilyIndices {
     fn new() -> Self {
-        Self { graphics_family: -1 }
+        Self { graphics_family: -1, present_family: -1 }
     }
 
     fn is_complete(&self) -> bool {
-        self.graphics_family >= 0
+        self.graphics_family >= 0 && self.present_family >= 0
     }
 }
-
 
 // APP
 #[allow(unused)]
@@ -50,12 +56,13 @@ struct HelloTriangleApplication {
     debug_callback: Option<DebugCallback>,
 
     events_loop: EventsLoop,
-    window: Window,
+    surface: Arc<Surface<Window>>,
 
     physical_device_index: usize, // can't store PhysicalDevice directly (lifetime issues)
     device: Arc<Device>,
 
     graphics_queue: Arc<Queue>,
+    present_queue: Arc<Queue>,
 }
 
 impl HelloTriangleApplication {
@@ -63,23 +70,24 @@ impl HelloTriangleApplication {
         let instance = Self::create_instance();
         let debug_callback = Self::setup_debug_callback(&instance);
 
-        let (events_loop, window) = Self::init_window();
+        let (events_loop, surface) = Self::create_surface(&instance);
 
-        let physical_device_index = Self::pick_physical_device(&instance);
-        let (device, graphics_queue) = Self::create_logical_device(
-            &instance, physical_device_index);
+        let physical_device_index = Self::pick_physical_device(&surface, &instance);
+        let (device, graphics_queue, present_queue) = Self::create_logical_device(
+            &instance, &surface, physical_device_index);
 
         Self {
             instance,
             debug_callback,
 
             events_loop,
-            window,
+            surface,
 
             physical_device_index,
             device,
 
             graphics_queue,
+            present_queue,
         }
     }
 
@@ -116,14 +124,14 @@ impl HelloTriangleApplication {
             .all(|layer_name| layers.contains(&layer_name.to_string()))
     }
 
-    fn init_window() -> (EventsLoop, Window) {
+    fn create_surface(instance: &Arc<Instance>) -> (EventsLoop, Arc<Surface<Window>>) {
         let events_loop = EventsLoop::new();
-        let window = WindowBuilder::new()
+        let surface  = WindowBuilder::new()
             .with_title("Vulkan")
             .with_dimensions(LogicalSize::new(f64::from(WIDTH), f64::from(HEIGHT)))
-            .build(&events_loop)
-            .unwrap();
-        (events_loop, window)
+            .build_vk_surface(&events_loop, instance.clone())
+            .expect("failed to create window surface!");
+        (events_loop, surface )
     }
 
     fn get_required_extensions() -> InstanceExtensions {
@@ -153,23 +161,27 @@ impl HelloTriangleApplication {
         }).ok()
     }
 
-    fn pick_physical_device(instance: &Arc<Instance>) -> usize {
+    fn pick_physical_device(surface: &Arc<Surface<Window>>, instance: &Arc<Instance>) -> usize {
         PhysicalDevice::enumerate(&instance)
-            .position(|device| Self::is_device_suitable(&device))
+            .position(|device| Self::is_device_suitable(&surface, &device))
             .expect("failed to find a suitable GPU!")
     }
 
-    fn is_device_suitable(device: &PhysicalDevice) -> bool {
-        let indices = Self::find_queue_families(device);
+    fn is_device_suitable(surface: &Arc<Surface<Window>>, device: &PhysicalDevice) -> bool {
+        let indices = Self::find_queue_families(&surface, device);
         indices.is_complete()
     }
 
-    fn find_queue_families(device: &PhysicalDevice) -> QueueFamilyIndices {
+    fn find_queue_families(surface: &Arc<Surface<Window>>, device: &PhysicalDevice) -> QueueFamilyIndices {
         let mut indices = QueueFamilyIndices::new();
         // TODO: replace index with id to simplify?
         for (i, queue_family) in device.queue_families().enumerate() {
             if queue_family.supports_graphics() {
                 indices.graphics_family = i as i32;
+            }
+
+            if surface.is_supported(queue_family).unwrap() {
+                indices.present_family = i as i32;
             }
 
             if indices.is_complete() {
@@ -182,27 +194,34 @@ impl HelloTriangleApplication {
 
     fn create_logical_device(
         instance: &Arc<Instance>,
+        surface: &Arc<Surface<Window>>,
         physical_device_index: usize,
-    ) -> (Arc<Device>, Arc<Queue>) {
-        let physical_device = PhysicalDevice::from_index(&instance, physical_device_index).unwrap();
-        let indices = Self::find_queue_families(&physical_device);
+    ) -> (Arc<Device>, Arc<Queue>, Arc<Queue>) {
 
-        let queue_family = physical_device.queue_families()
-            .nth(indices.graphics_family as usize).unwrap();
+        let physical_device = PhysicalDevice::from_index(&instance, physical_device_index).unwrap();
+        let indices = Self::find_queue_families(&surface, &physical_device);
+
+        let families = [indices.graphics_family, indices.present_family];
+        use std::iter::FromIterator;
+        let unique_queue_families: HashSet<&i32> = HashSet::from_iter(families.iter());
 
         let queue_priority = 1.0;
+        let queue_families = unique_queue_families.iter().map(|i| {
+            (physical_device.queue_families().nth(**i as usize).unwrap(), queue_priority)
+        });
 
         // NOTE: the tutorial recommends passing the validation layers as well
         // for legacy reasons (if ENABLE_VALIDATION_LAYERS is true). Vulkano handles that
         // for us internally.
 
-        let (device, mut queues) = Device::new(physical_device, &Features::none(), &DeviceExtensions::none(),
-            [(queue_family, queue_priority)].iter().cloned())
+        let (device, mut queues) = Device::new(physical_device, &Features::none(),
+            &DeviceExtensions::none(), queue_families)
             .expect("failed to create logical device!");
 
         let graphics_queue = queues.next().unwrap();
+        let present_queue = queues.next().unwrap_or_else(|| graphics_queue.clone());
 
-        (device, graphics_queue)
+        (device, graphics_queue, present_queue)
     }
 
     #[allow(unused)]
