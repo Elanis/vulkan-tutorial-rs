@@ -11,6 +11,7 @@ use vulkano::instance::{
     ApplicationInfo,
     Version,
     layers_list,
+    PhysicalDevice,
 };
 use vulkano::instance::debug::{DebugCallback, MessageTypes};
 
@@ -26,6 +27,22 @@ const ENABLE_VALIDATION_LAYERS: bool = true;
 #[cfg(not(debug_assertions))]
 const ENABLE_VALIDATION_LAYERS: bool = false;
 
+// QueueFamily
+struct QueueFamilyIndices {
+    graphics_family: i32,
+}
+impl QueueFamilyIndices {
+    fn new() -> Self {
+        Self { graphics_family: -1 }
+    }
+
+    fn is_complete(&self) -> bool {
+        self.graphics_family >= 0
+    }
+}
+
+
+// APP
 #[allow(unused)]
 struct HelloTriangleApplication {
     instance: Arc<Instance>,
@@ -33,6 +50,8 @@ struct HelloTriangleApplication {
 
     events_loop: EventsLoop,
     window: Window,
+
+    physical_device_index: usize, // can't store PhysicalDevice directly (lifetime issues)
 }
 
 impl HelloTriangleApplication {
@@ -42,12 +61,16 @@ impl HelloTriangleApplication {
 
         let (events_loop, window) = Self::init_window();
 
+        let physical_device_index = Self::pick_physical_device(&instance);
+
         Self {
             instance,
             debug_callback,
 
             events_loop,
             window,
+
+            physical_device_index,
         }
     }
 
@@ -119,6 +142,33 @@ impl HelloTriangleApplication {
         DebugCallback::new(&instance, msg_types, |msg| {
             println!("validation layer: {:?}", msg.description);
         }).ok()
+    }
+
+    fn pick_physical_device(instance: &Arc<Instance>) -> usize {
+        PhysicalDevice::enumerate(&instance)
+            .position(|device| Self::is_device_suitable(&device))
+            .expect("failed to find a suitable GPU!")
+    }
+
+    fn is_device_suitable(device: &PhysicalDevice) -> bool {
+        let indices = Self::find_queue_families(device);
+        indices.is_complete()
+    }
+
+    fn find_queue_families(device: &PhysicalDevice) -> QueueFamilyIndices {
+        let mut indices = QueueFamilyIndices::new();
+        // TODO: replace index with id to simplify?
+        for (i, queue_family) in device.queue_families().enumerate() {
+            if queue_family.supports_graphics() {
+                indices.graphics_family = i as i32;
+            }
+
+            if indices.is_complete() {
+                break;
+            }
+        }
+
+        indices
     }
 
     #[allow(unused)]
