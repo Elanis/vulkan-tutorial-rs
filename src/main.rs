@@ -16,7 +16,7 @@ use vulkano::instance::{
     layers_list,
     PhysicalDevice,
 };
-use vulkano::instance::debug::{DebugCallback, MessageTypes};
+use vulkano::instance::debug::{DebugCallback, MessageSeverity, MessageType};
 use vulkano::device::{Device, DeviceExtensions, Queue, Features};
 use vulkano::swapchain::{
     Surface,
@@ -213,8 +213,7 @@ impl HelloTriangleApplication {
     fn get_required_extensions() -> InstanceExtensions {
         let mut extensions = vulkano_win::required_extensions();
         if ENABLE_VALIDATION_LAYERS {
-            // TODO!: this should be ext_debug_utils (_report is deprecated), but that doesn't exist yet in vulkano
-            extensions.ext_debug_report = true;
+            extensions.ext_debug_utils = true;
         }
 
         extensions
@@ -225,14 +224,20 @@ impl HelloTriangleApplication {
             return None;
         }
 
-        let msg_types = MessageTypes {
-            error: true,
+        let msg_severity = MessageSeverity {
+			error: true,
             warning: true,
-            performance_warning: true,
             information: false,
-            debug: true,
+            verbose: false,
         };
-        DebugCallback::new(&instance, msg_types, |msg| {
+
+        let msg_types = MessageType {
+            general: true,
+            validation: true,
+            performance: true,
+        };
+
+        DebugCallback::new(&instance, msg_severity, msg_types, |msg| {
             println!("validation layer: {:?}", msg.description);
         }).ok()
     }
