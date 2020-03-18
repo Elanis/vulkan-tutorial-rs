@@ -5,7 +5,10 @@ extern crate winit;
 use std::sync::Arc;
 use std::collections::HashSet;
 
-use winit::{EventsLoop, WindowBuilder, Window, dpi::LogicalSize, Event, WindowEvent};
+use winit::event::{Event, WindowEvent};
+use winit::event_loop::{ControlFlow, EventLoop};
+use winit::window::{Window, WindowBuilder};
+use winit::dpi::LogicalSize;
 use vulkano_win::VkSurfaceBuild;
 
 use vulkano::instance::{
@@ -27,6 +30,7 @@ use vulkano::swapchain::{
     Swapchain,
     CompositeAlpha,
     acquire_next_image,
+    FullscreenExclusive,
 };
 use vulkano::format::Format;
 use vulkano::image::{ImageUsage, swapchain::SwapchainImage};
@@ -96,7 +100,6 @@ struct HelloTriangleApplication {
     instance: Arc<Instance>,
     debug_callback: Option<DebugCallback>,
 
-    events_loop: EventsLoop,
     surface: Arc<Surface<Window>>,
 
     physical_device_index: usize, // can't store PhysicalDevice directly (lifetime issues)
@@ -121,11 +124,11 @@ struct HelloTriangleApplication {
 }
 
 impl HelloTriangleApplication {
-    pub fn initialize() -> Self {
+    pub fn initialize(event_loop: &EventLoop<()>) -> Self {
         let instance = Self::create_instance();
         let debug_callback = Self::setup_debug_callback(&instance);
 
-        let (events_loop, surface) = Self::create_surface(&instance);
+        let surface = Self::create_surface(&instance, event_loop);
 
         let physical_device_index = Self::pick_physical_device(&surface, &instance);
         let (device, graphics_queue, present_queue) = Self::create_logical_device(
@@ -143,7 +146,6 @@ impl HelloTriangleApplication {
             instance,
             debug_callback,
 
-            events_loop,
             surface,
 
             physical_device_index,
@@ -200,14 +202,13 @@ impl HelloTriangleApplication {
             .all(|layer_name| layers.contains(&layer_name.to_string()))
     }
 
-    fn create_surface(instance: &Arc<Instance>) -> (EventsLoop, Arc<Surface<Window>>) {
-        let events_loop = EventsLoop::new();
+    fn create_surface(instance: &Arc<Instance>, event_loop: &EventLoop<()>) -> Arc<Surface<Window>> {
         let surface  = WindowBuilder::new()
             .with_title("Vulkan")
-            .with_dimensions(LogicalSize::new(f64::from(WIDTH), f64::from(HEIGHT)))
-            .build_vk_surface(&events_loop, instance.clone())
+            .with_inner_size(LogicalSize::new(f64::from(WIDTH), f64::from(HEIGHT)))
+            .build_vk_surface(&event_loop, instance.clone())
             .expect("failed to create window surface!");
-        (events_loop, surface )
+        surface
     }
 
     fn get_required_extensions() -> InstanceExtensions {
@@ -349,8 +350,9 @@ impl HelloTriangleApplication {
             capabilities.current_transform,
             CompositeAlpha::Opaque,
             present_mode,
+            FullscreenExclusive::Default,
             true, // clipped
-            None,
+            ColorSpace::SrgbNonLinear,
         ).expect("failed to create swap chain!");
 
         (swap_chain, images)
@@ -512,24 +514,26 @@ impl HelloTriangleApplication {
     }
 
     #[allow(unused)]
-    fn main_loop(&mut self) {
+    fn main_loop(&mut self, event_loop: EventLoop<()>) {
         loop {
         	self.draw_frame();
 
-            let mut done = false;
-            self.events_loop.poll_events(|ev| {
-                if let Event::WindowEvent { event: WindowEvent::CloseRequested, .. } = ev {
-                    done = true
-                }
-            });
-            if done {
-                return;
-            }
+			event_loop.run(move |event, _, control_flow| {
+		        *control_flow = ControlFlow::Wait;
+
+		        match event {
+		            Event::WindowEvent {
+		                event: WindowEvent::CloseRequested,
+		                window_id,
+		            } if true => *control_flow = ControlFlow::Exit,
+		            _ => (),
+		        }
+		    });
         }
     }
 
     fn draw_frame(&mut self) {
-        let (image_index, acquire_future) = acquire_next_image(self.swap_chain.clone(), None).unwrap();
+        let (image_index, _ok, acquire_future) = acquire_next_image(self.swap_chain.clone(), None).unwrap();
 
         let command_buffer = self.command_buffers[image_index].clone();
 
@@ -545,6 +549,8 @@ impl HelloTriangleApplication {
 }
 
 fn main() {
-    let mut app = HelloTriangleApplication::initialize();
-    app.main_loop();
+	let event_loop = EventLoop::new();
+
+    let mut app = HelloTriangleApplication::initialize(&event_loop);
+    app.main_loop(event_loop);
 }
