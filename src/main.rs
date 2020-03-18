@@ -26,10 +26,11 @@ use vulkano::swapchain::{
     PresentMode,
     Swapchain,
     CompositeAlpha,
+    acquire_next_image,
 };
 use vulkano::format::Format;
 use vulkano::image::{ImageUsage, swapchain::SwapchainImage};
-use vulkano::sync::SharingMode;
+use vulkano::sync::{SharingMode, GpuFuture};
 use vulkano::pipeline::{
     GraphicsPipeline,
     vertex::BufferlessDefinition,
@@ -87,7 +88,7 @@ impl QueueFamilyIndices {
     }
 }
 
-type ConcreteGraphicsPipeline = GraphicsPipeline<BufferlessDefinition, Box<PipelineLayoutAbstract + Send + Sync + 'static>, Arc<RenderPassAbstract + Send + Sync + 'static>>;
+type ConcreteGraphicsPipeline = GraphicsPipeline<BufferlessDefinition, Box<dyn PipelineLayoutAbstract + Send + Sync + 'static>, Arc<RenderPassAbstract + Send + Sync + 'static>>;
 
 // APP
 #[allow(unused)]
@@ -508,6 +509,8 @@ impl HelloTriangleApplication {
     #[allow(unused)]
     fn main_loop(&mut self) {
         loop {
+        	self.draw_frame();
+
             let mut done = false;
             self.events_loop.poll_events(|ev| {
                 if let Event::WindowEvent { event: WindowEvent::CloseRequested, .. } = ev {
@@ -518,6 +521,21 @@ impl HelloTriangleApplication {
                 return;
             }
         }
+    }
+
+    fn draw_frame(&mut self) {
+        let (image_index, acquire_future) = acquire_next_image(self.swap_chain.clone(), None).unwrap();
+
+        let command_buffer = self.command_buffers[image_index].clone();
+
+        let future = acquire_future
+            .then_execute(self.graphics_queue.clone(), command_buffer)
+            .unwrap()
+            .then_swapchain_present(self.present_queue.clone(), self.swap_chain.clone(), image_index)
+            .then_signal_fence_and_flush()
+            .unwrap();
+
+        future.wait(None).unwrap();
     }
 }
 
