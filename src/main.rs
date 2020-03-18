@@ -35,6 +35,10 @@ use vulkano::pipeline::{
     vertex::BufferlessDefinition,
     viewport::Viewport,
 };
+use vulkano::framebuffer::{
+    RenderPassAbstract,
+};
+use vulkano::single_pass_renderpass;
 
 const WIDTH: u32 = 800;
 const HEIGHT: u32 = 600;
@@ -90,6 +94,8 @@ struct HelloTriangleApplication {
 
     swap_chain: Arc<Swapchain<Window>>,
     swap_chain_images: Vec<Arc<SwapchainImage<Window>>>,
+
+    render_pass: Arc<RenderPassAbstract + Send + Sync>,
 }
 
 impl HelloTriangleApplication {
@@ -106,6 +112,7 @@ impl HelloTriangleApplication {
         let (swap_chain, swap_chain_images) = Self::create_swap_chain(&instance, &surface, physical_device_index,
             &device, &graphics_queue, &present_queue);
 
+        let render_pass = Self::create_render_pass(&device, swap_chain.format());
         Self::create_graphics_pipeline(&device, swap_chain.dimensions());
 
         Self {
@@ -123,6 +130,8 @@ impl HelloTriangleApplication {
 
             swap_chain,
             swap_chain_images,
+
+            render_pass,
         }
     }
 
@@ -308,6 +317,23 @@ impl HelloTriangleApplication {
         ).expect("failed to create swap chain!");
 
         (swap_chain, images)
+    }
+
+    fn create_render_pass(device: &Arc<Device>, color_format: Format) -> Arc<RenderPassAbstract + Send + Sync> {
+        Arc::new(single_pass_renderpass!(device.clone(),
+            attachments: {
+                color: {
+                    load: Clear,
+                    store: Store,
+                    format: color_format,
+                    samples: 1,
+                }
+            },
+            pass: {
+                color: [color],
+                depth_stencil: {}
+            }
+        ).unwrap())
     }
 
     fn create_graphics_pipeline(
